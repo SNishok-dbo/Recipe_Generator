@@ -7,10 +7,8 @@ User flow:
   4. RECIPE_VIEW  -- full recipe, progress tracking, PDF download
 """
 
-import json
 import logging
 from datetime import datetime, timezone
-from typing import Any
 
 import streamlit as st  # type: ignore
 import streamlit.components.v1 as components  # type: ignore
@@ -19,7 +17,6 @@ from chatbot import (
     get_all_ingredients,
     filter_by_diet,
     generate_recommendations_with_reasons,
-    generate_onboarding_suggestions,
     expand_recipe,
     handle_refinement,
     handle_global_chat,
@@ -2470,13 +2467,13 @@ elif st.session_state.app_state == "RECIPE_VIEW":
 
     # Recommendation / cooking history
     if all_act:
-        with st.expander("Activity History", expanded=False):
+        with st.expander("📋 Activity History", expanded=False):
             st.markdown(
                 "<p style='font-size:.83rem;color:#94a3b8;margin:0 0 10px'>"
                 "Everything you viewed, started, completed, and downloaded.</p>",
                 unsafe_allow_html=True,
             )
-            _imap = {"viewed recipe": "Viewed", "started cooking": "Cooking",
+            _imap = {"viewed recipe": "👁 Viewed", "started cooking": "🍳 Cooking",
                      "completed": "✅ Done", "downloaded recipe": "⬇ Downloaded"}
             hc1, hc2, hc3 = st.columns([2, 3, 2])
             hc1.markdown("<span style='font-size:.78rem;font-weight:700;color:#6b7280'>TIME</span>", unsafe_allow_html=True)

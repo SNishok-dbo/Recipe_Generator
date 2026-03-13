@@ -419,6 +419,137 @@ def _format_ingredients(ingredients: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _ingredient_name(item: dict) -> str:
+    return str(item.get("name") or item.get("product_name") or "Seasonal ingredient").strip()
+
+
+def _ingredient_price(item: dict) -> float:
+    raw_price = item.get("discounted_price") or item.get("current_price") or 0
+    try:
+        return float(raw_price)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _friendly_title(name: str) -> str:
+    cleaned = re.sub(r"\s+", " ", name).strip(" -,_")
+    words = [w for w in cleaned.split() if w]
+    if not words:
+        return "Market"
+    return " ".join(words[:3]).title()
+
+
+def _build_fallback_recommendations(
+    diet: str,
+    ingredients: list[dict],
+    count: int,
+    exclude_names: list[str] | None = None,
+) -> list[dict]:
+    """Build simple recipe cards from discounted ingredients when the LLM fails."""
+    if not ingredients:
+        ingredients = [
+            {
+                "name": "Chicken Fillets" if diet == "Non-Veg" else "Seasonal Vegetables",
+                "store": "local supermarket",
+                "category": "meat" if diet == "Non-Veg" else "fresh",
+                "discounted_price": 1.8 if diet == "Non-Veg" else 1.2,
+            }
+        ]
+
+    diet_label = "Vegetarian" if diet == "Veg" else "Non-Vegetarian"
+    filtered = filter_by_diet(ingredients, diet_label)
+    if not filtered:
+        filtered = ingredients[:]
+
+    sorted_items = sorted(filtered, key=_ingredient_price)
+    proteins = [
+        item for item in sorted_items
+        if (item.get("category") or "").lower() in {"meat", "fish", "dairy"}
+    ]
+    produce = [
+        item for item in sorted_items
+        if (item.get("category") or "").lower() in {"fresh", "frozen", "bakery", "cupboard", "tins"}
+    ]
+    anchors = proteins + produce + sorted_items
+
+    if diet == "Non-Veg":
+        templates = [
+            ("{main} Weeknight Pasta", "A quick pasta-style dinner built around today's lowest-price protein.", [
+                "Uses currently available discounted ingredients",
+                "Budget-friendly and cost-effective",
+                "Popular and family-friendly choice",
+            ]),
+            ("{main} Rice Bowl", "A simple bowl meal with a cheap protein and easy store-cupboard extras.", [
+                "Matches non-vegetarian preference perfectly",
+                "Quick preparation time (under 30 minutes)",
+                "Uses currently available discounted ingredients",
+            ]),
+            ("{main} Traybake", "A one-pan dinner that keeps prep low while making the most of supermarket deals.", [
+                "Budget-friendly and cost-effective",
+                "Well-balanced nutritional profile",
+                "Uses currently available discounted ingredients",
+            ]),
+            ("{main} Skillet Supper", "A fast stovetop meal designed around discounted meat or fish items.", [
+                "Matches non-vegetarian preference perfectly",
+                "Popular and family-friendly choice",
+                "Budget-friendly and cost-effective",
+            ]),
+        ]
+    else:
+        templates = [
+            ("{main} Veggie Pasta", "A quick vegetarian pasta using discounted produce and cupboard staples.", [
+                "Matches vegetarian preference perfectly",
+                "Budget-friendly and cost-effective",
+                "Uses currently available discounted ingredients",
+            ]),
+            ("{main} Stir-Fry Bowl", "A flexible veggie bowl that turns today's cheapest produce into dinner fast.", [
+                "Quick preparation time (under 30 minutes)",
+                "Well-balanced nutritional profile",
+                "Uses currently available discounted ingredients",
+            ]),
+            ("{main} Soup & Toasts", "A warming low-cost meal built around the freshest reduced-price veg on hand.", [
+                "Budget-friendly and cost-effective",
+                "Popular and family-friendly choice",
+                "Matches vegetarian preference perfectly",
+            ]),
+            ("{main} Traybake", "An easy oven dinner using discounted vegetables and simple pantry extras.", [
+                "Uses currently available discounted ingredients",
+                "Well-balanced nutritional profile",
+                "Quick preparation time (under 30 minutes)",
+            ]),
+        ]
+
+    blocked = {str(name).strip().lower() for name in (exclude_names or []) if str(name).strip()}
+    recommendations: list[dict] = []
+    seen_names: set[str] = set()
+
+    for index in range(max(count, len(templates))):
+        item = anchors[index % len(anchors)]
+        template_name, description, reasons = templates[index % len(templates)]
+        main = _friendly_title(_ingredient_name(item))
+        recipe_name = template_name.format(main=main)
+        normalized_name = recipe_name.lower()
+        if normalized_name in blocked or normalized_name in seen_names:
+            recipe_name = f"{recipe_name} {index + 1}"
+            normalized_name = recipe_name.lower()
+        seen_names.add(normalized_name)
+
+        store = str(item.get("store") or item.get("store_name") or "UK supermarket")
+        unit_price = max(_ingredient_price(item), 0.75)
+        estimated_total = max(unit_price * 2.2, 3.5)
+        recommendations.append({
+            "name": recipe_name,
+            "description": f"{description} Key deal found at {store}.",
+            "estimated_cost": f"£{estimated_total:.2f} for 2 servings",
+            "reasons": reasons[:3],
+            "cook_time": "25 mins",
+        })
+        if len(recommendations) == count:
+            break
+
+    return recommendations
+
+
 def generate_suggestions(intent: dict, ingredients: list[dict], selected_items: list[dict] | None = None) -> str:
     """Generate 3 recipe title suggestions. Uses selected_items if provided, else filters by diet."""
     budget = intent.get("budget") or 15
@@ -575,6 +706,8 @@ def generate_recommendations_with_reasons(
         ']'
     )
 
+    fallback_recs = _build_fallback_recommendations(diet, filtered, count, exclude_names)
+
     try:
         response = _llm().invoke(prompt)
         text = response.content if hasattr(response, "content") else str(response)
@@ -633,10 +766,12 @@ def generate_recommendations_with_reasons(
                         break
                 if cleaned:
                     return cleaned
-    except Exception:
-        pass  # Connection/LLM failure
+    except Exception as exc:
+        logger.warning("Recommendation generation failed, using fallback cards: %s", exc)
 
-    # LLM unavailable — return empty so callers can show an appropriate message
+    if fallback_recs:
+        return fallback_recs
+
     return []
 
 
