@@ -3,7 +3,13 @@ import base64
 import json
 
 from dotenv import load_dotenv
-from langchain_groq import ChatGroq
+
+try:
+    from langchain_groq import ChatGroq
+    _CHATGROQ_IMPORT_ERROR = None
+except ModuleNotFoundError as exc:
+    ChatGroq = None
+    _CHATGROQ_IMPORT_ERROR = exc
 
 load_dotenv(override=True)
 
@@ -57,6 +63,11 @@ else:
 
 def get_llm():
     """Always read the API key fresh from .env so key changes take effect immediately."""
+    if ChatGroq is None:
+        raise RuntimeError(
+            "Missing dependency 'langchain_groq'. Install with: pip install langchain-groq"
+        ) from _CHATGROQ_IMPORT_ERROR
+
     load_dotenv(override=True)
     key = os.getenv("GROQ_API_KEY", "")
     if not key:
